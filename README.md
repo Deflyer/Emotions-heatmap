@@ -1,5 +1,5 @@
 # Emotions-heatmap
-# Trabalho de Iniciação Científica desenvolvido com o auxílio do professor doutor Ricardo Marcondes Marcacini
+## Trabalho de Iniciação Científica desenvolvido com o auxílio do professor doutor Ricardo Marcondes Marcacini
 
 Esse projeto consiste na elaboração de um programa em python capaz de extrair emoções em tempo real de um vídeo em português, organizando-as em um mapa de calor sobre uma tabela de arousal valence.
 
