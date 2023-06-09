@@ -7,4 +7,4 @@ Para isso, por enquanto obtém-se a transcrissão do áudio em texto por meio do
 
 Planos futuros: Incorporar o áudio à classificação de emoções, incorporar embeddings do Bert à classificação de emoções em texto, melhorar a geração do mapa de calor, mais à definir ao longo do projeto
 
-Aqui encontra-se o link para o colab : [https://colab.research.google.com/drive/1KLLo-aIEw3ZPJSTsSZTkb9QEYWp5nveG?authuser=1#scrollTo=BE7a2oIoO75Q](url)
+Aqui encontra-se o link para o colab com a baseline: [https://colab.research.google.com/drive/1KLLo-aIEw3ZPJSTsSZTkb9QEYWp5nveG?authuser=1#scrollTo=BE7a2oIoO75Q](url)
