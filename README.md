@@ -35,3 +35,9 @@ Ele contém 4 métodos
 </ul>
 
 Exemplo de uso do pip [https://colab.research.google.com/drive/1UqzA6bDgtZWGji652a0UjT7ZtDh3Xyi5?authuser=1#scrollTo=CKL-Mm9D18BB](https://colab.research.google.com/drive/1UqzA6bDgtZWGji652a0UjT7ZtDh3Xyi5?authuser=1#scrollTo=CKL-Mm9D18BB)
+
+Este projeto foi apoiado pelo Ministério da Ciência, Tecnologia e Inovações, com recursos
+da Lei no 8.248, de 23 de outubro de 1991, no âmbito do PPI-SOFTEX, coordenado pela Softex e
+publicado Residência em TIC 13, DOU 01245.010222/2022-44.
+
+Um agradecimento ao projeto da Motorola e ao C4AI por financiarem e fortalecerem pesquisas no âmbito do Centro de IA
