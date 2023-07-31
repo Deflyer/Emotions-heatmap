@@ -92,7 +92,7 @@ class VideoEmotionRecognition:
             clip.audio.write_audiofile(part_name)
 
             #Aplico o modelo
-            temp = predict(part_name,sampling_rate,feature_extractor)
+            temp = predict(part_name,sampling_rate,feature_extractor, device, config)
             max_values = max(temp, key=lambda x:x['Score'])
 
             # A cada frase, atribuo a emocao mais provavel e sua probabilidade
@@ -288,7 +288,7 @@ def speech_file_to_array_fn(path, sampling_rate):
     return speech
 
 
-def predict(path, sampling_rate, feature_extractor):
+def predict(path, sampling_rate, feature_extractor, device, config):
     speech = speech_file_to_array_fn(path, sampling_rate)
     inputs = feature_extractor(speech, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
     inputs = {key: inputs[key].to(device) for key in inputs}
