@@ -9,8 +9,18 @@ import transformers
 import webvtt
 import os
 import logging
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from moviepy.editor import *
+import torchaudio
+from moviepy.editor import *
+from src.models import Wav2Vec2ForSpeechClassification, HubertForSpeechClassification
+from transformers import AutoConfig, Wav2Vec2FeatureExtractor
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from transformers import RobertaTokenizerFast, TFRobertaForSequenceClassification
+
+audio_model = None
 
 class VideoEmotionRecognition:
     def __init__(self, mp4):
@@ -45,10 +55,66 @@ class VideoEmotionRecognition:
         self.set_vtt(self.mp4.replace("mp4", "vtt"))
 
         self.dataframe = self.dataframe[self.dataframe.apply(lambda x: time_diff(x[1], x[0]), axis=1) > min_time]
-        self.dataframe.reset_index(inplace = True)
+        self.dataframe.reset_index(inplace = True, drop = True)
 
         self.logger.info("Successfully generated the dataframe")
+    def audio(self, method = "Hubert"):
+        try:
+          maximo = self.dataframe.shape[0]
+        except AttributeError:
+          self.logger.info("No transcript found, generating one first")
+          self.transcript()
+          maximo = self.dataframe.shape[0]
 
+        model_name_or_path = "Rajaram1996/Hubert_emotion"
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        config = AutoConfig.from_pretrained(model_name_or_path)
+        feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name_or_path)
+        sampling_rate = feature_extractor.sampling_rate
+
+        global audio_model
+        audio_model = HubertForSpeechClassification.from_pretrained(model_name_or_path, output_hidden_states=True).to(device)
+        video = VideoFileClip(self.mp4)
+
+        emot = []
+        scor = []
+        maximo = self.dataframe.shape[0]
+
+        for i in range(0, maximo):
+            #Usando os timestamps da transcricao, corot o audio separando cada frase
+            startPos = self.dataframe[0][i]
+            endPos = self.dataframe[1][i]
+
+            clip = video.subclip(startPos, endPos)
+
+            part_name = "part_"+str(i)+".mp3"
+            clip.audio.write_audiofile(part_name)
+
+            #Aplico o modelo
+            temp = predict(part_name,sampling_rate,feature_extractor)
+            max_values = max(temp, key=lambda x:x['Score'])
+
+            # A cada frase, atribuo a emocao mais provavel e sua probabilidade
+            max_emotion = (max_values['Emotion'])
+            max_emotion = max_emotion[(max_emotion.find('_')+ 1):]
+            if max_emotion == 'sad':
+              max_emotion = 'sadness'
+            elif max_emotion == 'angry':
+              max_emotion = 'anger'
+            elif max_emotion == 'happy':
+              max_emotion = 'joy'
+            emot.append(max_emotion)
+
+            max_score = (max_values['Score'])
+            scor.append(float(max_score.replace("%","",1))/ 100)
+
+            print("part ",i,"done")
+            os.remove(part_name)
+            i += 1
+
+        self.dataframe['label'] = emot
+        self.dataframe['prob'] = scor
     #Funcao utilizada para gerar uma coluna de strings no Dataframe contendo cada frase traduzida para o inglês
     def __Traduz(self, frase):
         traducao = self.pten_pipeline(frase)
@@ -214,3 +280,23 @@ def time_diff(fim, init):
     time_init = 3600*int(str_init[0]) + 60*int(str_init[1]) + float(str_init[2])
 
     return time_fim - time_init
+    
+def speech_file_to_array_fn(path, sampling_rate):
+    speech_array, _sampling_rate = torchaudio.load(path)
+    resampler = torchaudio.transforms.Resample(_sampling_rate, sampling_rate)
+    speech = resampler(speech_array).squeeze().numpy()
+    return speech
+
+
+def predict(path, sampling_rate, feature_extractor):
+    speech = speech_file_to_array_fn(path, sampling_rate)
+    inputs = feature_extractor(speech, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
+    inputs = {key: inputs[key].to(device) for key in inputs}
+
+    with torch.no_grad():
+        logits = audio_model(**inputs).logits
+
+    scores = F.softmax(logits, dim=1).detach().cpu().numpy()[0]
+    outputs = [{"Emotion": config.id2label[i], "Score": f"{round(score * 100, 3):.1f}%"} for i, score in
+               enumerate(scores)]
+    return outputs
