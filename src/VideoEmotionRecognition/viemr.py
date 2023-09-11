@@ -15,12 +15,12 @@ import torch.nn.functional as F
 from moviepy.editor import *
 import torchaudio
 from moviepy.editor import *
+import cv2
+from deepface import DeepFace
 from src.models import Wav2Vec2ForSpeechClassification, HubertForSpeechClassification
 from transformers import AutoConfig, Wav2Vec2FeatureExtractor
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from transformers import RobertaTokenizerFast, TFRobertaForSequenceClassification
-
-audio_model = None
 
 class VideoEmotionRecognition:
     def __init__(self, mp4):
@@ -58,22 +58,52 @@ class VideoEmotionRecognition:
         self.dataframe.reset_index(inplace = True, drop = True)
 
         self.logger.info("Successfully generated the dataframe")
-    def audio(self, method = "Hubert"):
-        try:
-          maximo = self.dataframe.shape[0]
-        except AttributeError:
-          self.logger.info("No transcript found, generating one first")
-          self.transcript()
-          maximo = self.dataframe.shape[0]
 
-        model_name_or_path = "Rajaram1996/Hubert_emotion"
+    def text(self, method = "RoBERTa-Go-Emotion"):
+        if 'text_label' in self.dataframe.columns:
+          self.logger.info("Text classification already done")
+          return
+        try:
+          self.dataframe.size
+          self.logger.info("Loading the translator")
+          tokenizer = AutoTokenizer.from_pretrained("unicamp-dl/translation-pt-en-t5")
+
+          model = AutoModelForSeq2SeqLM.from_pretrained("unicamp-dl/translation-pt-en-t5")
+
+          pten_pipeline = pipeline('text2text-generation', model=model, tokenizer=tokenizer)
+
+          self.logger.info("Successfully loaded, now applyng")
+          self.dataframe['Translation'] = list(self.dataframe[2].apply(traduz, args = (pten_pipeline,)))
+
+          self.logger.info("Loading the classifier")
+          tokenizer = RobertaTokenizerFast.from_pretrained("bhadresh-savani/bert-base-go-emotion")
+          model = TFRobertaForSequenceClassification.from_pretrained("bhadresh-savani/bert-base-go-emotion",from_pt=True)
+
+          emot_pipe = pipeline('sentiment-analysis',
+                              model="bhadresh-savani/bert-base-go-emotion",
+                              return_all_scores=True)
+
+          self.logger.info("Successfully loaded, now applying")
+          resp = list(self.dataframe['Translation'].apply(emocao_provavel, args = (emot_pipe,)))
+          temp = pd.DataFrame.from_records(resp, columns=['text_label', 'text_prob'])
+
+          self.dataframe = pd.concat([self.dataframe, temp], axis=1)
+          self.logger.info("Dataframe emotions classified")
+        except AttributeError:
+          raise ValueError("There is no transcription")
+
+    def audio(self, method = "Rajaram1996/Hubert_emotion"):
+        if 'audio_label' in self.dataframe.columns:
+          self.logger.info("Audio classification already done")
+          return
+        model_name_or_path = method
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         config = AutoConfig.from_pretrained(model_name_or_path)
         feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name_or_path)
         sampling_rate = feature_extractor.sampling_rate
 
-        global audio_model
+
         audio_model = HubertForSpeechClassification.from_pretrained(model_name_or_path, output_hidden_states=True).to(device)
         video = VideoFileClip(self.mp4)
 
@@ -81,18 +111,20 @@ class VideoEmotionRecognition:
         scor = []
         maximo = self.dataframe.shape[0]
 
+        self.logger.info("Running the Hubert classification for each phrase")
+
         for i in range(0, maximo):
-            #Usando os timestamps da transcricao, corot o audio separando cada frase
+            #Usando os timestamps da transcricao, corto o audio separando cada frase
             startPos = self.dataframe[0][i]
             endPos = self.dataframe[1][i]
 
             clip = video.subclip(startPos, endPos)
 
             part_name = "part_"+str(i)+".mp3"
-            clip.audio.write_audiofile(part_name)
+            clip.audio.write_audiofile(part_name, verbose=False)
 
             #Aplico o modelo
-            temp = predict(part_name,sampling_rate,feature_extractor, device, config)
+            temp = predict(part_name,sampling_rate, device, config, feature_extractor, audio_model)
             max_values = max(temp, key=lambda x:x['Score'])
 
             # A cada frase, atribuo a emocao mais provavel e sua probabilidade
@@ -109,61 +141,132 @@ class VideoEmotionRecognition:
             max_score = (max_values['Score'])
             scor.append(float(max_score.replace("%","",1))/ 100)
 
-            print("part ",i,"done")
             os.remove(part_name)
             i += 1
 
-        self.dataframe['label'] = emot
-        self.dataframe['prob'] = scor
-    #Funcao utilizada para gerar uma coluna de strings no Dataframe contendo cada frase traduzida para o inglês
-    def __Traduz(self, frase):
-        traducao = self.pten_pipeline(frase)
-        traducao = list(traducao[0].values())
-        return traducao[0]
+        self.dataframe['audio_label'] = emot
+        self.dataframe['audio_prob'] = scor
 
-    #Função para extrair do dicionario retornado pelo goemotions a emoção mais provável e sua probabilidade
-    def __Emocao_provavel(self, frase):
-        emotion_labels = self.emotion(frase)
+        self.logger.info("Successfully generated the dataframe")
 
-        max = emotion_labels[0][0]["score"]
-        emocao = emotion_labels[0][0]["label"]
+    def video(self, frames = 5 ):
+      if 'video_label' in self.dataframe.columns:
+          self.logger.info("Video classification already done")
+          return
+      video = VideoFileClip(self.mp4)
+      face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-        for dict in emotion_labels[0]:
-            if dict["score"] > max:
-              max = dict["score"]
-              emocao = dict["label"]
+      new_clip = video.set_fps(frames)
+      emot = []
+      scor = []
+      maximo = self.dataframe.shape[0]
 
-        return emocao, max
+      for i in range(0, maximo):
+          #Usando os timestamps da transcricao, corot o audio separando cada frase
+          startPos = self.dataframe[0][i]
+          endPos = self.dataframe[1][i]
 
-    def emotion_recognition(self, modality = "transcript", method = "RoBERTa-Go-Emotion"):
-        try:
-            self.dataframe.size
-            self.logger.info("Loading the translator")
-            tokenizer = AutoTokenizer.from_pretrained("unicamp-dl/translation-pt-en-t5")
+          clip = new_clip.subclip(startPos, endPos)
 
-            model = AutoModelForSeq2SeqLM.from_pretrained("unicamp-dl/translation-pt-en-t5")
+          frames = clip.iter_frames()
 
-            self.pten_pipeline = pipeline('text2text-generation', model=model, tokenizer=tokenizer)
+          total = {}
+          quant = 0
 
-            self.logger.info("Successfully loaded, now applyng")
-            self.dataframe['Translation'] = list(self.dataframe[2].apply(self.__Traduz))
+          for frame in frames:
 
-            self.logger.info("Loading the classifier")
-            tokenizer = RobertaTokenizerFast.from_pretrained("bhadresh-savani/bert-base-go-emotion")
-            model = TFRobertaForSequenceClassification.from_pretrained("bhadresh-savani/bert-base-go-emotion",from_pt=True)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            self.emotion = pipeline('sentiment-analysis',
-                                model="bhadresh-savani/bert-base-go-emotion",
-                                return_all_scores=True)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            #Se não tiver face, essa função uma tupla vazia
 
-            self.logger.info("Successfully loaded, now applying")
-            resp = list(self.dataframe['Translation'].apply(self.__Emocao_provavel))
-            temp = pd.DataFrame.from_records(resp, columns=['label', 'prob'])
+            if(len(faces) > 0):
+              try:
+                #Se não tiver face, essa função retorna uma excecao
+                objs = DeepFace.analyze(frame, actions = ['emotion'])
+                if(total == {}):
+                  total = objs[0]['emotion']
+                else:
+                  for key, value in objs[0]['emotion'].items():
+                    total[key] += value
+                quant += 1
+              except ValueError:
+                continue
+          for key, value in total.items():
+            total[key] = value / quant
+          if(quant == 0):
+            emot.append("no_face")
+            scor.append(0)
+          else:
+            max_prob = max(total.values())
+            max_emo = {i for i in total if total[i] == max_prob}
 
-            self.dataframe = pd.concat([self.dataframe, temp], axis=1)
-            self.logger.info("Dataframe emotions classified")
-        except AttributeError:
-          raise ValueError("There is no transcription")
+            #Max emo eh um set, converto para o formato certo em str
+            max_emo = str(max_emo)
+            max_emo = str(max_emo[2: -2])
+            max_emo
+
+            if max_emo == 'sad':
+              max_emo = 'sadness'
+            elif max_emo == 'angry':
+              max_emo = 'anger'
+            elif max_emo == 'happy':
+              max_emo = 'joy'
+            emot.append(max_emo)
+            scor.append(max_prob/(quant * 100))
+
+      self.dataframe['video_label'] = emot
+      self.dataframe['video_prob'] = scor
+
+    def emotion_recognition(self, modality, text_method = "RoBERTa-Go-Emotion", audio_method = "Rajaram1996/Hubert_emotion", video_frames = 5):
+      #Primeiro, verifica se ja existe uma transcricao
+      try:
+        maximo = self.dataframe.shape[0]
+      except AttributeError:
+        self.logger.info("No transcript found, generating one first")
+        self.transcript()
+        maximo = self.dataframe.shape[0]
+
+      if(modality == "transcript"):
+
+        self.logger.info("Initialzing the transcription")
+        self.text(text_method)
+
+        self.logger.info("Ending the transcription")
+
+      elif(modality == "audio"):
+
+        self.logger.info("Initialzing the audio classification")
+        self.audio(audio_method)
+
+        self.dataframe["label"] = self.dataframe["audio_label"]
+        self.dataframe["prob"] = self.dataframe["audio_prob"]
+        self.dataframe.drop(['audio_label', 'audio_prob'], axis=1, inplace = True)
+
+        self.logger.info("Ending the audio classification")
+
+      elif(modality == "video"):
+
+        self.logger.info("Initialzing the video classification")
+        self.video(video_frames)
+
+        self.dataframe["label"] = self.dataframe["video_label"]
+        self.dataframe["prob"] = self.dataframe["video_prob"]
+        self.dataframe.drop(['video_label', 'video_prob'], axis=1, inplace = True)
+
+        self.logger.info("Ending the video classification")
+
+      elif(modality == "multimodal"):
+        self.logger.info("Initialzing the transcription")
+        self.text(text_method)
+        self.logger.info("Ending the transcription")
+
+        self.logger.info("Initialzing the audio classification")
+        self.audio(audio_method)
+        self.logger.info("Ending the audio classification")
+
+        self.logger.info("Ending the multimodal classification")
+
 
     def set_vtt(self, arquivo):
         self.logger.info("Loading dataframe via vtt")
@@ -175,33 +278,37 @@ class VideoEmotionRecognition:
         self.dataframe = pd.DataFrame(L)
         self.logger.info("Successfully loaded")
 
-    def get_labels(self, modality = "transcript"):
+    def get_labels(self, modality = "all"):
+        if(modality == "transcript"):
+          self.dataframe["label"] = self.dataframe["text_label"]
+          self.dataframe["prob"] = self.dataframe["text_prob"]
+          return self.dataframe[[0,1,2,'label','prob']]
+        elif(modality == "audio"):
+          self.dataframe["label"] = self.dataframe["audio_label"]
+          self.dataframe["prob"] = self.dataframe["audio_prob"]
+          return self.dataframe[[0,1,2,'label','prob']]
+        elif(modality == "video"):
+          self.dataframe["label"] = self.dataframe["video_label"]
+          self.dataframe["prob"] = self.dataframe["video_prob"]
+          return self.dataframe[[0,1,2,'label','prob']]
         return self.dataframe
 
-    def __generate_coord(self,label):
-        index = self.emotions_coord.loc[self.emotions_coord['Emotion'] == label].index[0]
-        x = self.emotions_coord.iloc[index]['X']
-        y = self.emotions_coord.iloc[index]['Y']
-        return (x,y)
+    def get_heatmap(self, modality = 'all'):
 
-    def __kde_quartic(self,d,h):
-        dn=d/h
-        P=(15/16)*(1-dn**2)**2
-        return P
+        df = self.get_labels(modality)
 
-    def get_heatmap(self, modality = "transcript"):
-        
         self.logger.info("Adding the arousal valence coordinates")
-        resp = list(self.dataframe['label'].apply(self.__generate_coord))
+        resp = list(df['label'].apply(generate_coord, args = (self.emotions_coord,)))
         temp = pd.DataFrame.from_records(resp, columns=['x', 'y'])
 
-        self.dataframe = pd.concat([self.dataframe, temp], axis=1)
-        self.dataframe = self.dataframe[self.dataframe.label!='neutral']
-        self.dataframe = self.dataframe.reset_index(drop=True)
+        df = pd.concat([df, temp], axis=1)
+        df = df[df.label!='neutral']
+        df = df[df.label!='no_face']
+        df = df.reset_index(drop=True)
 
-        array_x = self.dataframe['x'].to_numpy()
+        array_x = df['x'].to_numpy()
         x = array_x.tolist()
-        array_y = self.dataframe['y'].to_numpy()
+        array_y = df['y'].to_numpy()
         y = array_y.tolist()
 
         #Definindo tamanho do grid e do raio(h)
@@ -233,7 +340,7 @@ class VideoEmotionRecognition:
                     #Calculando distância
                     d=math.sqrt((xc[j][k]-x[i])**2+(yc[j][k]-y[i])**2)
                     if d<=h:
-                        p=self.__kde_quartic(d,h)
+                        p=kde_quartic(d,h)
                     else:
                         p=0
                     kde_value_list.append(p)
@@ -241,7 +348,7 @@ class VideoEmotionRecognition:
                 p_total=sum(kde_value_list)
                 intensity_row.append(p_total)
             intensity_list.append(intensity_row)
-            
+
         self.logger.info("Generating the plot")
         #Saída do Heatmap
         plt.figure(figsize=(7,7))
@@ -271,30 +378,65 @@ class VideoEmotionRecognition:
         #plt.colorbar()
         plt.plot(x,y,'x',color='white')
 
+
+#Funcoes auxiliares para classifcar quanto as emocoes
+
+def traduz(frase, pten_pipeline):
+    traducao = pten_pipeline(frase)
+    traducao = list(traducao[0].values())
+    return traducao[0]
+
+    #Função para extrair do dicionario retornado pelo goemotions a emoção mais provável e sua probabilidade
+def emocao_provavel(frase, emot_pipe):
+    emotion_labels = emot_pipe(frase)
+
+    max = emotion_labels[0][0]["score"]
+    emocao = emotion_labels[0][0]["label"]
+
+    for dict in emotion_labels[0]:
+        if dict["score"] > max:
+          max = dict["score"]
+          emocao = dict["label"]
+
+    return emocao, max
+
+#Funcoes auxiliares para gerar o heatmap
+def generate_coord(label, coords):
+    index = coords.loc[coords['Emotion'] == label].index[0]
+    x = coords.iloc[index]['X']
+    y = coords.iloc[index]['Y']
+    return (x,y)
+def kde_quartic(d,h):
+    dn=d/h
+    P=(15/16)*(1-dn**2)**2
+    return P
+
+#Funcoes auxiliares para a transcricao
 def time_diff(fim, init):
 
-    str_fim = fim.split(":")
-    str_init = init.split(":")
+      str_fim = fim.split(":")
+      str_init = init.split(":")
 
-    time_fim = 3600*int(str_fim[0]) + 60*int(str_fim[1]) + float(str_fim[2])
-    time_init = 3600*int(str_init[0]) + 60*int(str_init[1]) + float(str_init[2])
+      time_fim = 3600*int(str_fim[0]) + 60*int(str_fim[1]) + float(str_fim[2])
+      time_init = 3600*int(str_init[0]) + 60*int(str_init[1]) + float(str_init[2])
 
-    return time_fim - time_init
-    
+      return time_fim - time_init
+
 def speech_file_to_array_fn(path, sampling_rate):
     speech_array, _sampling_rate = torchaudio.load(path)
     resampler = torchaudio.transforms.Resample(_sampling_rate, sampling_rate)
     speech = resampler(speech_array).squeeze().numpy()
     return speech
 
+#Funcoes auxiliares para a funcionalidade audio
 
-def predict(path, sampling_rate, feature_extractor, device, config):
+def predict(path, sampling_rate, device, config, feature_extractor, model):
     speech = speech_file_to_array_fn(path, sampling_rate)
     inputs = feature_extractor(speech, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
     inputs = {key: inputs[key].to(device) for key in inputs}
 
     with torch.no_grad():
-        logits = audio_model(**inputs).logits
+        logits = model(**inputs).logits
 
     scores = F.softmax(logits, dim=1).detach().cpu().numpy()[0]
     outputs = [{"Emotion": config.id2label[i], "Score": f"{round(score * 100, 3):.1f}%"} for i, score in
