@@ -239,20 +239,12 @@ class VideoEmotionRecognition:
         self.logger.info("Initialzing the audio classification")
         self.audio(audio_method)
 
-        self.dataframe["label"] = self.dataframe["audio_label"]
-        self.dataframe["prob"] = self.dataframe["audio_prob"]
-        self.dataframe.drop(['audio_label', 'audio_prob'], axis=1, inplace = True)
-
         self.logger.info("Ending the audio classification")
 
       elif(modality == "video"):
 
         self.logger.info("Initialzing the video classification")
         self.video(video_frames)
-
-        self.dataframe["label"] = self.dataframe["video_label"]
-        self.dataframe["prob"] = self.dataframe["video_prob"]
-        self.dataframe.drop(['video_label', 'video_prob'], axis=1, inplace = True)
 
         self.logger.info("Ending the video classification")
 
