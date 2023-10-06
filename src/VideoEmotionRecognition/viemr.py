@@ -8,6 +8,7 @@ import gc
 import transformers
 import webvtt
 import os
+import random
 import logging
 import torch
 import torch.nn as nn
@@ -15,7 +16,12 @@ import torch.nn.functional as F
 from moviepy.editor import *
 import torchaudio
 from moviepy.editor import *
+from sklearn.neighbors import kneighbors_graph
+import networkx as nx
 import cv2
+import glob
+import re
+from sentence_transformers import SentenceTransformer
 from deepface import DeepFace
 from src.models import Wav2Vec2ForSpeechClassification, HubertForSpeechClassification
 from transformers import AutoConfig, Wav2Vec2FeatureExtractor
@@ -78,6 +84,7 @@ class VideoEmotionRecognition:
           self.logger.info("Loading the classifier")
           tokenizer = RobertaTokenizerFast.from_pretrained("bhadresh-savani/bert-base-go-emotion")
           model = TFRobertaForSequenceClassification.from_pretrained("bhadresh-savani/bert-base-go-emotion",from_pt=True)
+          encoder_text = SentenceTransformer("bhadresh-savani/bert-base-go-emotion")
 
           emot_pipe = pipeline('sentiment-analysis',
                               model="bhadresh-savani/bert-base-go-emotion",
@@ -86,6 +93,7 @@ class VideoEmotionRecognition:
           self.logger.info("Successfully loaded, now applying")
           resp = list(self.dataframe['Translation'].apply(emocao_provavel, args = (emot_pipe,)))
           temp = pd.DataFrame.from_records(resp, columns=['text_label', 'text_prob'])
+          self.dataframe["text_embeddings"] = list(self.dataframe['Translation'].apply(encoder_text_adj, args = (encoder_text,)))
 
           self.dataframe = pd.concat([self.dataframe, temp], axis=1)
           self.logger.info("Dataframe emotions classified")
@@ -96,6 +104,7 @@ class VideoEmotionRecognition:
         if 'audio_label' in self.dataframe.columns:
           self.logger.info("Audio classification already done")
           return
+
         model_name_or_path = method
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -109,6 +118,7 @@ class VideoEmotionRecognition:
 
         emot = []
         scor = []
+        embeddings = []
         maximo = self.dataframe.shape[0]
 
         self.logger.info("Running the Hubert classification for each phrase")
@@ -125,6 +135,8 @@ class VideoEmotionRecognition:
 
             #Aplico o modelo
             temp = predict(part_name,sampling_rate, device, config, feature_extractor, audio_model)
+            embeddings.append(encoder_audio(part_name,sampling_rate, device, feature_extractor, audio_model))
+
             max_values = max(temp, key=lambda x:x['Score'])
 
             # A cada frase, atribuo a emocao mais provavel e sua probabilidade
@@ -146,6 +158,7 @@ class VideoEmotionRecognition:
 
         self.dataframe['audio_label'] = emot
         self.dataframe['audio_prob'] = scor
+        self.dataframe['audio_embeddings'] = embeddings
 
         self.logger.info("Successfully generated the dataframe")
 
@@ -257,6 +270,33 @@ class VideoEmotionRecognition:
         self.audio(audio_method)
         self.logger.info("Ending the audio classification")
 
+        self.logger.info("Generating the graph")
+
+        A_text = kneighbors_graph(np.array(self.dataframe.text_embeddings.to_list()), 2, mode='connectivity')
+        G_text = nx.Graph(A_text.toarray())
+
+        A_audio = kneighbors_graph(np.array(self.dataframe.audio_embeddings.to_list()), 2, mode='connectivity')
+        G_audio = nx.Graph(A_audio.toarray())
+
+        self.G_multimodal = nx.Graph()
+        for edge in G_text.edges(): self.G_multimodal.add_edge(edge[0],edge[1])
+        for edge in G_audio.edges(): self.G_multimodal.add_edge(edge[0],edge[1])
+
+        t = []
+        for index,row in self.dataframe.iterrows():
+          df_coord_text = generate_coord(row["text_label"],self.emotions_coord)
+          coord_text = [float(df_coord_text[0]),float(df_coord_text[1])]
+          self.G_multimodal.nodes[index]['text'] = np.array(coord_text)
+
+          df_coord_audio = generate_coord(row["audio_label"],self.emotions_coord)
+          coord_audio = [float(df_coord_audio[0]),float(df_coord_audio[1])]
+          self.G_multimodal.nodes[index]['audio'] = np.array(coord_audio)
+
+          t.append(np.linalg.norm(self.G_multimodal.nodes[index]['audio']-self.G_multimodal.nodes[index]['text']))
+
+        for index,row in self.dataframe.iterrows():
+          self.G_multimodal.nodes[index]['pseudolabeling'] = 1.0 - (t[index]/np.max(t))
+
         self.logger.info("Ending the multimodal classification")
 
 
@@ -285,91 +325,92 @@ class VideoEmotionRecognition:
           return self.dataframe[[0,1,2,'label','prob']]
         return self.dataframe
 
-    def get_heatmap(self, modality = 'all'):
+    def get_heatmap(self, modality = 'all', animated = False, window = 60, stride = 10):
 
-        df = self.get_labels(modality)
+        if modality == 'multimodal':
+          x = []
+          y = []
+          GCP(self.G_multimodal,mi=1,audio_weight=0.4, text_weight=0.6,max_iter=30)
+          for index in self.dataframe.index:
+            v = self.G_multimodal.nodes[index]['f']
+            if animated == True or (np.abs(v[0]) > 0.1 or np.abs(v[1]) > 0.1):
+              x.append(v[0])
+              y.append(v[1])
+        else:
+          df = self.get_labels(modality)
 
-        self.logger.info("Adding the arousal valence coordinates")
-        resp = list(df['label'].apply(generate_coord, args = (self.emotions_coord,)))
-        temp = pd.DataFrame.from_records(resp, columns=['x', 'y'])
+          self.logger.info("Adding the arousal valence coordinates")
+          resp = list(df['label'].apply(generate_coord, args = (self.emotions_coord,)))
+          temp = pd.DataFrame.from_records(resp, columns=['x', 'y'])
 
-        df = pd.concat([df, temp], axis=1)
-        df = df[df.label!='neutral']
-        df = df[df.label!='no_face']
-        df = df.reset_index(drop=True)
+          df = pd.concat([df, temp], axis=1)
+          if animated == False:
+              df = df[df.label!='neutral']
+              df = df[df.label!='no_face']
+              df = df.reset_index(drop=True)
 
-        array_x = df['x'].to_numpy()
-        x = array_x.tolist()
-        array_y = df['y'].to_numpy()
-        y = array_y.tolist()
+          array_x = df['x'].to_numpy()
+          x = array_x.tolist()
+          array_y = df['y'].to_numpy()
+          y = array_y.tolist()
 
-        #Definindo tamanho do grid e do raio(h)
-        grid_size=0.02
-        h=0.5
+        if animated == True:
+            os.mkdir("tempjpgs")
+            clip = VideoFileClip(self.mp4)
 
-        #Tomando valores de máximos e mínimos de X e Y.
-        x_min=-1
-        x_max=1
-        y_min=-1
-        y_max=1
+            max = clip.duration
+            ini = 0
+            fim = window
+            atual = 1
 
-        #Construindo grid
-        x_grid=np.arange(x_min-h,x_max+h,grid_size)
-        y_grid=np.arange(y_min-h,y_max+h,grid_size)
-        x_mesh,y_mesh=np.meshgrid(x_grid,y_grid)
+            while(1):
+                id_ini = np.where(self.dataframe[0].apply(to_seconds) >= ini)[0][0]
+                id_fim = np.where(self.dataframe[0].apply(to_seconds) <= fim)[0][-1]
 
-        #Determinando ponto central do grid
-        xc=x_mesh+(grid_size/2)
-        yc=y_mesh+(grid_size/2)
+                x_temp = np.array(x[id_ini: id_fim + 1])
+                y_temp = np.array(y[id_ini: id_fim + 1])
 
-        self.logger.info("Generating the intensity list for heatmap")
-        intensity_list=[]
-        for j in range(len(xc)):
-            intensity_row=[]
-            for k in range(len(xc[0])):
-                kde_value_list=[]
-                for i in range(len(x)):
-                    #Calculando distância
-                    d=math.sqrt((xc[j][k]-x[i])**2+(yc[j][k]-y[i])**2)
-                    if d<=h:
-                        p=kde_quartic(d,h)
-                    else:
-                        p=0
-                    kde_value_list.append(p)
-                #Soma os valores de intensidade
-                p_total=sum(kde_value_list)
-                intensity_row.append(p_total)
-            intensity_list.append(intensity_row)
+                if all(val == 0 for val in x_temp) and all(val == 0 for val in y_temp):
+                  x_temp = np.array([0])
+                  y_temp = np.array([0])
+                else:
+                  x_temp = [i for i,j in zip(x_temp,y_temp) if (i != 0 and j != 0)]
+                  y_temp = [j for i,j in zip(x[id_ini: id_fim + 1],y_temp) if (i != 0 and j != 0)]
 
-        self.logger.info("Generating the plot")
-        #Saída do Heatmap
-        plt.figure(figsize=(7,7))
+                plot_heatmap(x_temp, y_temp, self.emotions_coord, "animated")
+                plt.title("Emotions from " + str(ini) + " to " + str(fim) + " seconds")
+                plt.savefig("tempjpgs/output" + str(atual) + ".jpg")
+                plt.close()
+                if fim > max:
+                  break
+                ini += stride
+                fim += stride
+                atual += 1
 
-        intensity=np.array(intensity_list)
-        plt.pcolormesh(x_mesh,y_mesh,intensity,cmap='YlOrRd') #https://matplotlib.org/stable/tutorials/colors/colormaps.html
+            img_array = []
+            for filename in sorted(glob.glob('tempjpgs/*.jpg') , key=numericalSort):
+                img = cv2.imread(filename)
+                height, width, layers = img.shape
+                size = (width,height)
+                img_array.append(img)
+                os.remove(filename)
+
+            os.rmdir("tempjpgs")
+            out = cv2.VideoWriter('heatmap.avi',cv2.VideoWriter_fourcc(*'DIVX'), 15, size)
+
+            for i in range(len(img_array)):
+              for j in range(10):
+                out.write(img_array[i])
+
+            out.release()
+
+            myvideo = VideoFileClip('heatmap.avi')
+
+            return ipython_display(myvideo)
 
 
-        #fig, ax = plt.subplots()
-
-        x_emo = self.emotions_coord.X.to_list()
-        y_emo = self.emotions_coord.Y.to_list()
-        plt.scatter(x_emo, y_emo)
-
-
-        for i, row in self.emotions_coord.iterrows():
-            plt.annotate(row['Emotion'], (x_emo[i], y_emo[i]))
-
-        plt.xlim(-1, 1)
-        plt.ylim(-1,1)
-
-        ax = plt.gca()
-        ax.add_patch(plt.Circle((0, 0), 1, color='black', fill=False))
-        plt.axvline(x = 0, color = 'black', label = 'Arousal')
-        plt.axhline(y = 0, color = 'black', label = 'Valence')
-
-        #plt.colorbar()
-        plt.plot(x,y,'x',color='white')
-
+        else:
+          plot_heatmap(x, y, self.emotions_coord, modality)
 
 #Funcoes auxiliares para classifcar quanto as emocoes
 
@@ -393,6 +434,12 @@ def emocao_provavel(frase, emot_pipe):
     return emocao, max
 
 #Funcoes auxiliares para gerar o heatmap
+
+numbers = re.compile(r"(\d+)")
+def numericalSort(value):
+  parts = numbers.split(value)
+  parts[1::2] = map(int, parts[1::2])
+  return parts
 def generate_coord(label, coords):
     index = coords.loc[coords['Emotion'] == label].index[0]
     x = coords.iloc[index]['X']
@@ -402,15 +449,79 @@ def kde_quartic(d,h):
     dn=d/h
     P=(15/16)*(1-dn**2)**2
     return P
+def plot_heatmap(x, y, emotions_coord, modality):
+    #Definindo tamanho do grid e do raio(h)
+    grid_size=0.02
+    h=0.5
+
+    #Tomando valores de máximos e mínimos de X e Y.
+    x_min=-1
+    x_max=1
+    y_min=-1
+    y_max=1
+
+    #Construindo grid
+    x_grid=np.arange(x_min-h,x_max+h,grid_size)
+    y_grid=np.arange(y_min-h,y_max+h,grid_size)
+    x_mesh,y_mesh=np.meshgrid(x_grid,y_grid)
+
+    #Determinando ponto central do grid
+    xc=x_mesh+(grid_size/2)
+    yc=y_mesh+(grid_size/2)
+
+    intensity_list=[]
+    for j in range(len(xc)):
+        intensity_row=[]
+        for k in range(len(xc[0])):
+            kde_value_list=[]
+            for i in range(len(x)):
+                #Calculando distância
+                d=math.sqrt((xc[j][k]-x[i])**2+(yc[j][k]-y[i])**2)
+                if d<=h:
+                    p=kde_quartic(d,h)
+                else:
+                    p=0
+                kde_value_list.append(p)
+            #Soma os valores de intensidade
+            p_total=sum(kde_value_list)
+            intensity_row.append(p_total)
+        intensity_list.append(intensity_row)
+
+    #Saída do Heatmap
+    plt.figure(figsize=(7,7))
+
+    intensity=np.array(intensity_list)
+    plt.pcolormesh(x_mesh,y_mesh,intensity,cmap='YlOrRd') #https://matplotlib.org/stable/tutorials/colors/colormaps.html
+
+
+    #fig, ax = plt.subplots()
+
+    x_emo = emotions_coord.X.to_list()
+    y_emo = emotions_coord.Y.to_list()
+    plt.scatter(x_emo, y_emo)
+
+
+    for i, row in emotions_coord.iterrows():
+        plt.annotate(row['Emotion'], (x_emo[i], y_emo[i]))
+
+    plt.xlim(-1, 1)
+    plt.ylim(-1,1)
+
+    ax = plt.gca()
+    ax.add_patch(plt.Circle((0, 0), 1, color='black', fill=False))
+    plt.axvline(x = 0, color = 'black', label = 'Arousal')
+    plt.axhline(y = 0, color = 'black', label = 'Valence')
+
+    #plt.colorbar()
+
+    plt.plot(x,y,'x',color='white')
 
 #Funcoes auxiliares para a transcricao
+
 def time_diff(fim, init):
 
-      str_fim = fim.split(":")
-      str_init = init.split(":")
-
-      time_fim = 3600*int(str_fim[0]) + 60*int(str_fim[1]) + float(str_fim[2])
-      time_init = 3600*int(str_init[0]) + 60*int(str_init[1]) + float(str_init[2])
+      time_fim = to_seconds(fim)
+      time_init = to_seconds(init)
 
       return time_fim - time_init
 
@@ -419,6 +530,9 @@ def speech_file_to_array_fn(path, sampling_rate):
     resampler = torchaudio.transforms.Resample(_sampling_rate, sampling_rate)
     speech = resampler(speech_array).squeeze().numpy()
     return speech
+
+def encoder_text_adj(sentence, encoder):
+    return encoder.encode([sentence])[0]
 
 #Funcoes auxiliares para a funcionalidade audio
 
@@ -434,3 +548,58 @@ def predict(path, sampling_rate, device, config, feature_extractor, model):
     outputs = [{"Emotion": config.id2label[i], "Score": f"{round(score * 100, 3):.1f}%"} for i, score in
                enumerate(scores)]
     return outputs
+
+    # extrai os embeddings da predição feita
+def encoder_audio(path, sampling_rate, device, feature_extractor, model, mean_pool=True):
+    speech = speech_file_to_array_fn(path, sampling_rate)
+    inputs = feature_extractor(speech, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
+    inputs = {key: inputs[key].to(device) for key in inputs}
+
+    with torch.no_grad():
+        out = model(**inputs).hidden_states[-1]
+        if mean_pool:
+            return np.array(torch.mean(out, dim=1).cpu())[0]
+        else:
+            return np.array(out.cpu())[0]
+#Funcoes auxiliares para a funcionalidade multimodal
+def GCP(G, max_iter=100, audio_weight=0.2, text_weight=0.8, mi=1, min_diff=0.05):
+
+  # inicializando
+  L_nodes = []
+  for n in G.nodes():
+    G.nodes[n]['f'] = np.average([G.nodes[n]['text'],G.nodes[n]['audio']],axis=0,weights=[text_weight, audio_weight])
+    L_nodes.append(n)
+
+
+  for i in range(0,max_iter):
+    random.shuffle(L_nodes)
+
+    # propagando
+    diff = 0
+    for node in L_nodes:
+
+      f_new = np.array([0.0, 0.0])
+      count = 0
+      for neighbor in G.neighbors(node):
+        f_new += G.nodes[neighbor]['f']
+        count += 1
+
+      f_new /= count
+
+      f_pseudolabeling = np.average([G.nodes[node]['text'],G.nodes[node]['audio']],axis=0,weights=[text_weight, audio_weight])
+      pl = G.nodes[node]['pseudolabeling']*mi
+      f_new = f_pseudolabeling*pl + f_new*(1-pl)
+      diff += np.linalg.norm(G.nodes[node]['f']-f_new)
+      G.nodes[node]['f']=f_new
+
+
+    print("Iteration #"+str(i+1)+" Q(F)="+str(diff))
+    if diff <= min_diff: break
+
+#Funcoes uteis
+def to_seconds(horario):
+
+  horario_separado = horario.split(":")
+  seconds = 3600*int(horario_separado[0]) + 60*int(horario_separado[1]) + float(horario_separado[2])
+
+  return seconds
