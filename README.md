@@ -42,7 +42,7 @@ Ele contém 4 métodos
           <ul>
             <li>Gera um vídeo contendo as variações no heatmap ao longo do tempo</li>
           </ul>
-        <li>"join_video" = True(ainda não implementado)</li>
+        <li>"join_video" = True</li>
           <ul>
             <li>Gera um vídeo contendo o vídeo original e o heatmap, com as emoções ao longo do tempo, simultaneamente</li>
           </ul>
