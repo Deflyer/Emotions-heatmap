@@ -8,6 +8,7 @@ import gc
 import transformers
 import webvtt
 import os
+import ffmpeg
 import random
 import logging
 import torch
@@ -15,7 +16,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from moviepy.editor import *
 import torchaudio
-from moviepy.editor import *
 from sklearn.neighbors import kneighbors_graph
 import networkx as nx
 import cv2
@@ -325,7 +325,7 @@ class VideoEmotionRecognition:
           return self.dataframe[[0,1,2,'label','prob']]
         return self.dataframe
 
-    def get_heatmap(self, modality = 'all', animated = False, window = 60, stride = 10):
+    def get_heatmap(self, modality = 'all', animated = False, window = 60, stride = 10, join_video = False):
 
         if modality == 'multimodal':
           x = []
@@ -340,13 +340,13 @@ class VideoEmotionRecognition:
           df = self.get_labels(modality)
 
           self.logger.info("Adding the arousal valence coordinates")
+          df.loc[df['label'] == 'no_face', ['label']] = 'neutral'
           resp = list(df['label'].apply(generate_coord, args = (self.emotions_coord,)))
           temp = pd.DataFrame.from_records(resp, columns=['x', 'y'])
 
           df = pd.concat([df, temp], axis=1)
           if animated == False:
               df = df[df.label!='neutral']
-              df = df[df.label!='no_face']
               df = df.reset_index(drop=True)
 
           array_x = df['x'].to_numpy()
@@ -355,10 +355,11 @@ class VideoEmotionRecognition:
           y = array_y.tolist()
 
         if animated == True:
+            self.logger.info("Generating images for the video")
             os.mkdir("tempjpgs")
             clip = VideoFileClip(self.mp4)
 
-            max = clip.duration
+            maximo = clip.duration
             ini = 0
             fim = window
             atual = 1
@@ -381,12 +382,14 @@ class VideoEmotionRecognition:
                 plt.title("Emotions from " + str(ini) + " to " + str(fim) + " seconds")
                 plt.savefig("tempjpgs/output" + str(atual) + ".jpg")
                 plt.close()
-                if fim > max:
+                if fim > maximo:
                   break
                 ini += stride
                 fim += stride
                 atual += 1
+            self.logger.info("Done generating images")
 
+            self.logger.info("Creating Video")
             img_array = []
             for filename in sorted(glob.glob('tempjpgs/*.jpg') , key=numericalSort):
                 img = cv2.imread(filename)
@@ -396,15 +399,62 @@ class VideoEmotionRecognition:
                 os.remove(filename)
 
             os.rmdir("tempjpgs")
-            out = cv2.VideoWriter('heatmap.avi',cv2.VideoWriter_fourcc(*'DIVX'), 15, size)
 
-            for i in range(len(img_array)):
-              for j in range(10):
-                out.write(img_array[i])
+            clip = VideoFileClip(self.mp4)
+            value = clip.size
+            rate = 1 + (clip.fps - 1 ) *join_video
+            out = cv2.VideoWriter('heatmap.mp4',cv2.VideoWriter_fourcc(*'XVID'), rate, size)
+
+
+            if join_video == True:
+
+              rate = int(rate)
+              tam =  window
+              count = 0
+              duration = int(clip.duration)
+              duration *= rate
+
+              for i in range(len(img_array)):
+                for j in range(rate * tam):
+                  if count >= duration:
+                    break
+                  out.write(img_array[i])
+                  count += 1
+                tam = stride
+              while count < duration:
+                out.write(img_array[-1])
+                count += 1
+
+            else:
+              for i in range(len(img_array)):
+                for j in range(2):
+                  out.write(img_array[i])
 
             out.release()
 
-            myvideo = VideoFileClip('heatmap.avi')
+            myvideo = VideoFileClip('heatmap.mp4')
+            self.logger.info("Video created")
+
+            if join_video == True:
+              self.logger.info("Joining Videos")
+
+              flag = 0
+
+              bashCommand = "ffmpeg -y -i heatmap.mp4 -f lavfi -i anullsrc -vcodec copy -acodec aac -shortest theatmap.mp4"
+              flag += os.system(bashCommand)
+
+              bashCommand = "ffmpeg -y -i theatmap.mp4 -filter:v scale=" + str(value[0]) + ":" + str(value[1]) + " sheatmap.mp4"
+              flag += os.system(bashCommand)
+
+              bashCommand = "ffmpeg -y -i " + self.mp4 + " -i sheatmap.mp4 -filter_complex \"[0][1]scale2ref=\'oh*mdar\':\'if(lt(main_h,ih),ih,main_h)\'[0s][1s];[1s][0s]scale2ref=\'oh*mdar\':\'if(lt(main_h,ih),ih,main_h)\'[1s][0s];[0s][1s]hstack,setsar=1; [0:a][1:a]amerge[a]\" -map \"[a]\" -ac 2 video_with_heatmap.mp4"
+              flag += os.system(bashCommand)
+
+              if(flag == 0):
+                self.logger.info("Videos successufully joined")
+              else:
+                self.logger.info("Error detected joining videos")
+
+              return
 
             return ipython_display(myvideo)
 
@@ -423,15 +473,15 @@ def traduz(frase, pten_pipeline):
 def emocao_provavel(frase, emot_pipe):
     emotion_labels = emot_pipe(frase)
 
-    max = emotion_labels[0][0]["score"]
+    maximo = emotion_labels[0][0]["score"]
     emocao = emotion_labels[0][0]["label"]
 
     for dict in emotion_labels[0]:
-        if dict["score"] > max:
-          max = dict["score"]
+        if dict["score"] > maximo:
+          maximo = dict["score"]
           emocao = dict["label"]
 
-    return emocao, max
+    return emocao, maximo
 
 #Funcoes auxiliares para gerar o heatmap
 
