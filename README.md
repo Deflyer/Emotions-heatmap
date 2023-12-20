@@ -25,6 +25,7 @@ Ele contém 4 métodos
         <li>"modality" = "transcript"</li>
         <li>"modality" = "audio"</li>
         <li>"modality" = "video"</li>
+        <li>"modality" = "multimodal"</li>
       </ul>
     </ul>
   </li>
@@ -35,12 +36,38 @@ Ele contém 4 métodos
   </li>
   <li>get_heatmap
     <ul>
-      <li>Gera um heatmap com o dataframe desde que ele tenha sido classificado quanto as emoções</li>
+      <li>Gera um heatmap com o dataframe desde que ele tenha sido classificado quanto as emoções, com algumas flags é possível mudar a exibição do heatmap</li>
+      <ul>
+        <li>"animated" = True</li>
+          <ul>
+            <li>Gera um vídeo contendo as variações no heatmap ao longo do tempo</li>
+          </ul>
+        <li>"join_video" = True</li>
+          <ul>
+            <li>Gera um vídeo contendo o vídeo original e o heatmap, com as emoções ao longo do tempo, simultaneamente</li>
+          </ul>
+      </ul>
     </ul>
   </li>
 </ul>
 
+Links Importantes
+
 Exemplo de uso do pip [https://colab.research.google.com/drive/1UqzA6bDgtZWGji652a0UjT7ZtDh3Xyi5?authuser=1#scrollTo=CKL-Mm9D18BB](https://colab.research.google.com/drive/1UqzA6bDgtZWGji652a0UjT7ZtDh3Xyi5?authuser=1#scrollTo=CKL-Mm9D18BB)
+
+Apresentação no Canvas explicando o projeto [https://www.canva.com/design/DAFy1Pywr0Q/F6_WBK5Bjz12OHZG8P4V8Q/edit](https://www.canva.com/design/DAFy1Pywr0Q/F6_WBK5Bjz12OHZG8P4V8Q/edit)
+https://sol.sbc.org.br/index.php/eniac/article/view/25746/25562
+
+Artigo do ENIAC publicado sobre o assunto elaborado pelo colega Gabriel Natal[https://sol.sbc.org.br/index.php/eniac/article/view/25746/25562](https://sol.sbc.org.br/index.php/eniac/article/view/25746/25562)
+
+Fontes para os modelos utilizados:
+Github do whisperx(transcrição) [https://github.com/m-bain/whisperX](https://github.com/m-bain/whisperX)
+Hugging Face do tradutor da Unicamp [https://huggingface.co/unicamp-dl/translation-pt-en-t5](https://huggingface.co/unicamp-dl/translation-pt-en-t5)
+Site oficial do goemotions (texto) [https://blog.research.google/2021/10/goemotions-dataset-for-fine-grained.html?m=1](https://blog.research.google/2021/10/goemotions-dataset-for-fine-grained.html?m=1)
+Github contendo a implementação do classificador HUBERT (áudio) [https://github.com/m3hrdadfi/soxan](https://github.com/m3hrdadfi/soxan)
+Github do deepface(vídeo) [https://github.com/serengil/deepface](https://github.com/serengil/deepface)
+
+
 
 Este projeto foi apoiado pelo Ministério da Ciência, Tecnologia e Inovações, com recursos
 da Lei no 8.248, de 23 de outubro de 1991, no âmbito do PPI-SOFTEX, coordenado pela Softex e
