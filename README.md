@@ -42,7 +42,7 @@ Ele contém 4 métodos
           <ul>
             <li>Gera um vídeo contendo as variações no heatmap ao longo do tempo</li>
           </ul>
-        <li>"join_video" = True</li>
+        <li>"join_video" = True(ainda não implementado)</li>
           <ul>
             <li>Gera um vídeo contendo o vídeo original e o heatmap, com as emoções ao longo do tempo, simultaneamente</li>
           </ul>
@@ -50,7 +50,8 @@ Ele contém 4 métodos
     </ul>
   </li>
 </ul>
-
+Aqui tem um exemplo de heatmap gerado
+<img src="/img/heatmap.png">
 Links Importantes
 
 Exemplo de uso do pip [https://colab.research.google.com/drive/1UqzA6bDgtZWGji652a0UjT7ZtDh3Xyi5?authuser=1#scrollTo=CKL-Mm9D18BB](https://colab.research.google.com/drive/1UqzA6bDgtZWGji652a0UjT7ZtDh3Xyi5?authuser=1#scrollTo=CKL-Mm9D18BB)
