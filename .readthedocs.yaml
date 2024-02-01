@@ -10,4 +10,4 @@ python:
     - requirements: doc/requirements.txt
 
 sphinx:
-  configuration: doc/source/conf.py
+  configuration: doc/conf.py
