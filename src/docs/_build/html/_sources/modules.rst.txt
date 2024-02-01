@@ -1,8 +1,0 @@
-VideoEmotionRecognition Documentation
-=====================================
-
-.. automodule:: VideoEmotionRecognition.viemr
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
